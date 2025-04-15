@@ -1,45 +1,56 @@
-import json
+from utils.json_utils import load_json, save_json
+from utils.box_utils import create_3d_box, compute_3d_iou
+from models.dummy_model import DummyModel
 import open3d as o3d
 import numpy as np
+import os
 
-# Function to load JSON data
-def load_json(filepath):
-    with open(filepath, 'r') as f:
-        return json.load(f)
-
-# Function to create a 3D box for an object
-def create_3d_box(center, size, rotation):
-    box = o3d.geometry.OrientedBoundingBox()
-    box.center = center
-    box.extent = size
-    box.R = o3d.geometry.OrientedBoundingBox.get_rotation_matrix_from_xyz(rotation)
-    return box
-
-# Load input and output data
-input_data = load_json("data/input/scene1.json")  # Replace with your file path
-output_data = load_json("data/output/scene1.json")  # Replace with your file path
+# Load input and ground truth
+scene_id = "scene_001"
+input_data = load_json(f"data/input/{scene_id}.json")  # Replace with your file path
+ground_truth = load_json(f"data/output/{scene_id}.json")  # Replace with your file path
 
 # Create a list to store 3D geometries
 geometries = []
 
 # Add vehicles (CarA and CarB) from input data
 for car in ["CarA", "CarB"]:
-    car_data = input_data[car]
-    center = [car_data["location"]["x"], car_data["location"]["y"], car_data["location"]["z"]]
-    size = [car_data["dimensions"]["length"], car_data["dimensions"]["width"], car_data["dimensions"]["height"]]
-    rotation = [0, 0, np.radians(car_data["rotation"])]  # Convert rotation to radians
+    location_key = f"{car}_Location"
+    rotation_key = f"{car}_Rotation"
+    dimension_key = f"{car}_Dimension"
+    
+    center = input_data[location_key] + [0]  # Add z-coordinate as 0
+    size = input_data[dimension_key]
+    rotation = [0, 0, np.radians(input_data[rotation_key])]  # Convert rotation to radians
+    
     box = create_3d_box(center, size, rotation)
     box.color = (1, 0, 0)  # Red for vehicles
     geometries.append(box)
 
 # Add other road agents from output data
-for agent in output_data:
-    center = [agent["location"]["x"], agent["location"]["y"], agent["location"]["z"]]
-    size = [agent["dimensions"]["length"], agent["dimensions"]["width"], agent["dimensions"]["height"]]
-    rotation = [0, 0, np.radians(agent["rotation"])]  # Convert rotation to radians
+for agent in ground_truth:
+    center = agent["Location"] + [0]  # Add z-coordinate as 0
+    size = agent["Dimension"]
+    rotation = [0, 0, np.radians(agent["Rotation"])]  # Convert rotation to radians
     box = create_3d_box(center, size, rotation)
-    box.color = (0, 1, 0)  # Green for other agents
+    
+    # Set color based on object type
+    if agent["object"] == "Car":
+        box.color = (0, 1, 0)  # Green for cars
+    elif agent["object"] == "Pedestrian":
+        box.color = (0, 0, 1)  # Blue for pedestrians
+    
     geometries.append(box)
+
+    # Generate predictions
+    model = DummyModel(noise_level=0.5)
+    predicted_output = model.predict(input_data)
+
+    # [Optional] Save predictions
+    os.makedirs("data/predictions", exist_ok=True)
+    with open(f"data/predictions/{scene_id}.json", 'w') as f:
+        import json
+        json.dump(predicted_output, f, indent=2)
 
 # Visualize the scene
 o3d.visualization.draw_geometries(geometries)
