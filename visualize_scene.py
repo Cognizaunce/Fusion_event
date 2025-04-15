@@ -4,53 +4,70 @@ from models.dummy_model import DummyModel
 import open3d as o3d
 import numpy as np
 import os
+import json
 
-# Load input and ground truth
+# ==== Load input and ground truth ====
 scene_id = "scene_001"
-input_data = load_json(f"data/input/{scene_id}.json")  # Replace with your file path
-ground_truth = load_json(f"data/output/{scene_id}.json")  # Replace with your file path
+input_data = load_json(f"data/input/{scene_id}.json")
+ground_truth = load_json(f"data/output/{scene_id}.json")
 
-# Create a list to store 3D geometries
+# ==== Generate predictions ====
+model = DummyModel(noise_level=0.5)
+predicted_output = model.predict(input_data)
+
+# Save predictions
+os.makedirs("data/predictions", exist_ok=True)
+save_json(predicted_output, f"data/predictions/{scene_id}.json")
+
+# ==== Visualize input cars (CarA, CarB) ====
 geometries = []
-
-# Add vehicles (CarA and CarB) from input data
 for car in ["CarA", "CarB"]:
-    location_key = f"{car}_Location"
-    rotation_key = f"{car}_Rotation"
-    dimension_key = f"{car}_Dimension"
-    
-    center = input_data[location_key] + [0]  # Add z-coordinate as 0
-    size = input_data[dimension_key]
-    rotation = [0, 0, np.radians(input_data[rotation_key])]  # Convert rotation to radians
-    
+    center = input_data[f"{car}_Location"]
+    size = input_data[f"{car}_Dimension"]
+    rotation = [0, 0, np.radians(input_data[f"{car}_Rotation"])]
     box = create_3d_box(center, size, rotation)
-    box.color = (1, 0, 0)  # Red for vehicles
+        # Label with distinct color
+    if car == "CarA":
+        box.color = (1.0, 0.0, 0.0)  # Red
+    else:
+        box.color = (1.0, 0.5, 0.0)  # Orangeee
     geometries.append(box)
 
-# Add other road agents from output data
-for agent in ground_truth:
-    center = agent["Location"] + [0]  # Add z-coordinate as 0
-    size = agent["Dimension"]
-    rotation = [0, 0, np.radians(agent["Rotation"])]  # Convert rotation to radians
+# ==== Visualize GT vs Prediction and compute IoU ====
+
+# Visualize GT and predicted boxes
+geometries = []
+# Add GT boxes (green for cars, blue for pedestrians)
+gt_boxes = []
+for obj in ground_truth:
+    center = obj["Location"]
+    size = obj["Dimension"]
+    rotation = [0, 0, np.radians(obj["Rotation"])]
     box = create_3d_box(center, size, rotation)
-    
-    # Set color based on object type
-    if agent["object"] == "Car":
-        box.color = (0, 1, 0)  # Green for cars
-    elif agent["object"] == "Pedestrian":
-        box.color = (0, 0, 1)  # Blue for pedestrians
-    
+    box.color = (0, 1, 0) if obj["object"] == "Car" else (0, 0, 1)
     geometries.append(box)
+    gt_boxes.append(box)
 
-    # Generate predictions
-    model = DummyModel(noise_level=0.5)
-    predicted_output = model.predict(input_data)
+# Add prediction boxes (yellow)
+pred_boxes = []
+for obj in predicted_output:
+    center = obj["Location"]
+    size = obj["Dimension"]
+    rotation = [0, 0, np.radians(obj["Rotation"])]
+    box = create_3d_box(center, size, rotation)
+    box.color = (1, 1, 0)
+    geometries.append(box)
+    pred_boxes.append(box)
 
-    # [Optional] Save predictions
-    os.makedirs("data/predictions", exist_ok=True)
-    with open(f"data/predictions/{scene_id}.json", 'w') as f:
-        import json
-        json.dump(predicted_output, f, indent=2)
+    # Compute full IoU Matrix
+    ious = []
+for i, pred_box in enumerate(pred_boxes):
+    for j, gt_box in enumerate(gt_boxes):
+        iou = compute_3d_iou(pred_box, gt_box)
+        ious.append((i, j, iou))
+        print(f"Pred {i} vs GT {j}: IoU = {iou:.3f}")
 
-# Visualize the scene
+print(f"\n➡️ Average IoU over scene: {np.mean(ious):.3f}")
+
+# ==== Show visualization ====
 o3d.visualization.draw_geometries(geometries)
