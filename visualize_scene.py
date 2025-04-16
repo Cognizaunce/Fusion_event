@@ -30,13 +30,11 @@ for car in ["CarA", "CarB"]:
     if car == "CarA":
         box.color = (1.0, 0.0, 0.0)  # Red
     else:
-        box.color = (1.0, 0.5, 0.0)  # Orangeee
+        box.color = (1.0, 0.5, 0.0)  # Orange
     geometries.append(box)
 
 # ==== Visualize GT vs Prediction and compute IoU ====
 
-# Visualize GT and predicted boxes
-geometries = []
 # Add GT boxes (green for cars, blue for pedestrians)
 gt_boxes = []
 for obj in ground_truth:
@@ -48,14 +46,14 @@ for obj in ground_truth:
     geometries.append(box)
     gt_boxes.append(box)
 
-# Add prediction boxes (yellow)
+# Add prediction boxes (black)
 pred_boxes = []
 for obj in predicted_output:
     center = obj["Location"]
     size = obj["Dimension"]
     rotation = [0, 0, np.radians(obj["Rotation"])]
     box = create_3d_box(center, size, rotation)
-    box.color = (1, 1, 0)
+    box.color = (0, 0, 0)
     geometries.append(box)
     pred_boxes.append(box)
 
