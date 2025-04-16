@@ -56,6 +56,12 @@ The environment includes vehicles, pedestrians, and cyclists, some of whom may b
 
 ![scene](/images/scene.png)
 
+The camera Intrinsic Matrix is
+``` 
+  2058.72664   ,  0           , 960
+  0            , 2058.72664   , 540
+  0            , 0            , 1
+```
 ## Dataset Description
 
 The [/data/input](/data/input) folder contains a JSON metadata file for each scene. Each JSON file contains the following information
