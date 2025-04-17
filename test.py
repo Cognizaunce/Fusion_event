@@ -4,6 +4,8 @@ import open3d as o3d
 import cv2
 import os
 
+import  utils.box_utils  as box_utils
+from utils.json_utils import load_json, save_json
 import utils.main_utils as utils
 import utils.merge_utils as merge_utils
 from models.dummy_model import DummyModel
@@ -14,15 +16,19 @@ def merge_lidar_and_camera(lidar_path, image_path, intrinsics, extrinsics):
     Projects LiDAR points into the camera image, assigns image-based color
     to visible points, and returns a colorized point cloud.
 
-    Points not visible in the image are added with a default gray color.
+    Points not visible in the image are added with a grayscale color based on intensity
+    if available, or default gray if not.
     """
     points_lidar, intensity = merge_utils.load_lidar_with_intensity(lidar_path)
     image = merge_utils.load_camera_image(image_path)
     points_cam = merge_utils.transform_lidar_to_camera(points_lidar, extrinsics)
 
-    visible_points = []
-    colors = []
-    occluded_points = []
+    has_intensity = intensity is not None and len(intensity) == len(points_lidar)
+    intensity_min = intensity.min() if has_intensity else 0.0
+    intensity_range = np.ptp(intensity) if has_intensity and np.ptp(intensity) > 0 else 1.0
+
+    visible_pts, visible_colors = [], []
+    occluded_pts, occluded_colors = [], []
 
     for i, pt_cam in enumerate(points_cam):
         uv = merge_utils.project_point_to_image(pt_cam, intrinsics)
@@ -30,19 +36,26 @@ def merge_lidar_and_camera(lidar_path, image_path, intrinsics, extrinsics):
             u, v = uv
             b, g, r = image[v, u]
             color = [r / 255.0, g / 255.0, b / 255.0]
-            visible_points.append(points_lidar[i])  # original (LiDAR) position
-            colors.append(color)
+            visible_pts.append(points_lidar[i])
+            visible_colors.append(color)
         else:
-            occluded_points.append(points_lidar[i])
+            occluded_pts.append(points_lidar[i])
+            if has_intensity:
+                gray = 1.0 - (intensity[i] - intensity_min) / intensity_range
+                occluded_colors.append([gray, gray, gray])
+            else:
+                occluded_colors.append([0.5, 0.5, 0.5])
 
-    # Merge and build Open3D PointCloud
-    merged_points = visible_points + occluded_points
-    merged_colors = colors + [[0.5, 0.5, 0.5]] * len(occluded_points)
+    # Build two separate point clouds
+    pcd_visible = o3d.geometry.PointCloud()
+    pcd_visible.points = o3d.utility.Vector3dVector(np.array(visible_pts))
+    pcd_visible.colors = o3d.utility.Vector3dVector(np.array(visible_colors))
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(np.array(merged_points))
-    pcd.colors = o3d.utility.Vector3dVector(np.array(merged_colors))
-    return pcd
+    pcd_occluded = o3d.geometry.PointCloud()
+    pcd_occluded.points = o3d.utility.Vector3dVector(np.array(occluded_pts))
+    pcd_occluded.colors = o3d.utility.Vector3dVector(np.array(occluded_colors))
+
+    return pcd_visible, pcd_occluded
 
 
 def transform_pointcloud_to_global_frame(
@@ -61,7 +74,7 @@ def transform_pointcloud_to_global_frame(
         [np.cos(yaw_rad), -np.sin(yaw_rad)],
         [np.sin(yaw_rad),  np.cos(yaw_rad)]
     ])
-
+    
     xy = points[:, :2]
     rotated_xy = xy @ R.T
     translated_xy = rotated_xy + np.asarray(origin)[:2]
@@ -72,7 +85,6 @@ def transform_pointcloud_to_global_frame(
     pcd_transformed = o3d.geometry.PointCloud()
     pcd_transformed.points = o3d.utility.Vector3dVector(points_3d_global)
 
-    # Preserve colors (e.g., grayscale intensity)
     if pcd.has_colors():
         pcd_transformed.colors = o3d.utility.Vector3dVector(np.asarray(pcd.colors))
 
@@ -103,12 +115,12 @@ def main():
     # Step 1: Load the datasets.
     #scene_id = [str(i).zfill(3) for i in range(1, 11)]
     scene_id = "001"  # Use first scene ID for testing
-    input_data = utils.load_json(f"data/input/scene_{scene_id}.json")
-    ground_truth = utils.load_json(f"data/output/scene_{scene_id}.json")
+    input_data = load_json(f"data/input/scene_{scene_id}.json")
+    ground_truth = load_json(f"data/output/scene_{scene_id}.json")
 
     model = DummyModel(noise_level=0.5)
     predicted_output = model.predict(input_data)
-    utils.save_json(predicted_output, f"data/predictions/scene_{scene_id}.json")
+    save_json(predicted_output, f"data/predictions/scene_{scene_id}.json")
 
     gt_boxes = []
     pred_boxes = []
@@ -119,7 +131,7 @@ def main():
         center = input_data[f"{car}_Location"]
         size = input_data[f"{car}_Dimension"]
         rotation = [0, 0, np.radians(input_data[f"{car}_Rotation"])]
-        box = utils.create_3d_box(center, size, rotation)
+        box = box_utils.create_3d_box(center, size, rotation)
         box.color = (1.0, 0.0, 0.0) if car == "CarA" else (1.0, 0.5, 0.0)
         geometries.append(box)
 
@@ -128,7 +140,7 @@ def main():
         center = obj["Location"]
         size = obj["Dimension"]
         rotation = [0, 0, np.radians(obj["Rotation"])]
-        box = utils.create_3d_box(center, size, rotation)
+        box = box_utils.create_3d_box(center, size, rotation)
         box.color = (0, 1, 0) if obj["object"] == "Car" else (0, 0, 1)
         geometries.append(box)
         gt_boxes.append(box)
@@ -164,16 +176,20 @@ def main():
             car_center = np.array(input_data[f"{car_key}_Location"])
             car_yaw_deg = input_data[f"{car_key}_Rotation"]
 
-            pcd_colored = merge_lidar_and_camera(lidar, cam_img, intrinsics, extrinsics)
-            pcd_global = transform_pointcloud_to_global_frame(pcd_colored, car_center, car_yaw_deg)
-            geometries.append(pcd_global)
+            pcd_visible, pcd_occluded = merge_lidar_and_camera(lidar, cam_img, intrinsics, extrinsics)
+
+            pcd_visible = transform_pointcloud_to_global_frame(pcd_visible, car_center, car_yaw_deg)
+            pcd_occluded = transform_pointcloud_to_global_frame(pcd_occluded, car_center, car_yaw_deg)
+
+            geometries.append(pcd_visible)
+            geometries.append(pcd_occluded)
 
     # Step 7: Add predicted boxes
     for obj in predicted_output:
         center = obj["Location"]
         size = obj["Dimension"]
         rotation = [0, 0, np.radians(obj["Rotation"])]
-        box = utils.create_3d_box(center, size, rotation)
+        box = box_utils.create_3d_box(center, size, rotation)
         box.color = (0, 0, 0)
         geometries.append(box)
         pred_boxes.append(box)
@@ -182,15 +198,33 @@ def main():
     ious = []
     for i, pred_box in enumerate(pred_boxes):
         for j, gt_box in enumerate(gt_boxes):
-            iou = utils.compute_3d_iou(pred_box, gt_box)
+            iou = box_utils.compute_3d_iou(pred_box, gt_box)
             ious.append((i, j, iou))
             print(f"Pred {i} vs GT {j}: IoU = {iou:.3f}")
 
     print(f"\n➡️ Average IoU over scene: {np.mean([x[2] for x in ious]):.3f}")
 
-    # Step 9: Add ground grid and display scene
-    geometries.append(create_ground_grid())
-    o3d.visualization.draw_geometries(geometries)
+    # Step 9: Add ground grid and axis frame for orientation
+    ground_grid = create_ground_grid()
+    axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
+
+    geometries.append(ground_grid)
+    geometries.append(axis)
+
+    # Step 10: Launch visualizer with all geometries
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(window_name='3D Scene', width=1280, height=720)
+    
+    for g in geometries:
+        vis.add_geometry(g)
+
+    # Set global point size (all points) – tweak as needed
+    vis.get_render_option().point_size = 3.0
+    vis.get_render_option().background_color = np.asarray([0.2, 0.0, 0.2])  # Optional: dark background
+
+    vis.run()
+    vis.destroy_window()
+
 
 if __name__ == "__main__":
     main()
