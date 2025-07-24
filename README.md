@@ -62,6 +62,9 @@ The camera Intrinsic Matrix is
   0            , 2058.72664   , 540
   0            , 0            , 1
 ```
+
+Each lidar is mounted above the center of its vehicle by 1.7 meters. The camera, as well, is mounted 1.5 meters above the center. Both are directed towards the front of the car, parallel to the road level.
+
 ## Dataset Description
 
 The [/data/input](/data/input) folder contains a JSON metadata file for each scene. Each JSON file contains the following information
